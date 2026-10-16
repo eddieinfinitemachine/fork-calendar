@@ -92,8 +92,7 @@ private struct PaletteBody: View {
             footer
         }
         .frame(width: 560)
-        .background(CWT.paper)
-        .overlay(Rectangle().strokeBorder(CWT.ink, lineWidth: 1))
+        .cwtCard()
         .padding(.top, 80)
     }
 
@@ -344,12 +343,13 @@ private struct PaletteRow: View {
                     .foregroundStyle(CWT.inkSoft)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(Rectangle().fill(Color.primary.opacity(0.08)))
+                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(Rectangle().fill(selected ? Color.accentColor.opacity(0.15) : .clear))
+        .background(selected ? Color.accentColor.opacity(0.15) : .clear,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(Rectangle())
     }
 }

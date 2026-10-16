@@ -109,6 +109,7 @@ struct SpanBarView: View {
         let isSelected = appState.selectedKey == eventKey(event)
         let awaiting = event.needsMyResponse
         let todo = isTodo
+        let shape = CWT.eventShape(compact: compact)
         Text((todo ? PersonalOS.displayTitle(event.title) : event.title) ?? "Untitled")
             .font(CWT.ui(compact ? 10 : 11))
             .lineLimit(1)
@@ -117,7 +118,7 @@ struct SpanBarView: View {
             .padding(.trailing, 6)
             .padding(.vertical, compact ? 0 : 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(Rectangle().fill(color.opacity(
+            .background(shape.fill(color.opacity(
                 awaiting ? 0.06 : isSelected ? 0.32 : 0.18
             )))
             .overlay(alignment: .leading) {
@@ -125,11 +126,12 @@ struct SpanBarView: View {
                 CalendarStrips(copies: copies)
                     .padding(.vertical, 1)
             }
+            // The strips follow the rounded corners.
+            .clipShape(shape)
             .overlay { if event.myParticipantStatus == .declined { DeclinedSlash(color: color) } }
             .overlay {
                 if awaiting {
-                    Rectangle()
-                        .strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    shape.strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 }
             }
             .contentShape(Rectangle())

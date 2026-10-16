@@ -208,8 +208,9 @@ struct SidebarView: View {
         }
     }
 
-    /// "CALL SHEET": today's people to call, from Personal OS. Click opens
-    /// the person in the browser. Refreshed with every sync pass.
+    /// "CALL SHEET": today's people to call, from Personal OS. The box
+    /// checks a person off, the name opens them in the browser, the swap
+    /// control asks for someone else. Refreshed with every sync pass.
     private var callSheetSection: some View {
         Section {
             if let error = personalOS.callSheetError {
@@ -265,41 +266,110 @@ struct SidebarView: View {
     }
 }
 
-/// One call-sheet person: name, then the reason in faint smaller type;
-/// done calls fade behind a check.
+/// One call-sheet person: checkbox, name, then the reason in faint smaller
+/// type; done calls fade and strike behind a checked box. Trailing swap
+/// control (hover on macOS) asks Personal OS for someone else.
 struct CallSheetRow: View {
+    @EnvironmentObject var store: CalendarStore
+    @ObservedObject private var personalOS = PersonalOS.shared
     @Environment(\.openURL) private var openURL
     let item: PersonalOS.CallSheetItem
+    @State private var hovering = false
+
+    private var doneLabel: String { item.done ? "Mark \(item.name) not done" : "Mark \(item.name) done" }
+
+    private func openProfile() {
+        if let url = URL(string: item.url) { openURL(url) }
+    }
 
     var body: some View {
-        Button {
-            if let url = URL(string: item.url) { openURL(url) }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: item.done ? "checkmark" : "phone")
-                    .font(CWT.ui(10))
-                    .foregroundStyle(CWT.inkSoft)
-                    .frame(width: 14)
-                Text(item.name)
-                    .font(CWT.ui(13))
-                    .foregroundStyle(CWT.ink)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                if let reason = item.reason, !reason.isEmpty {
-                    Text(reason)
-                        .font(CWT.ui(11))
-                        .foregroundStyle(CWT.inkFaint)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
+        let swapping = personalOS.callSheetSwapping.contains(item.personId)
+        HStack(spacing: 4) {
+            Button {
+                store.setCallSheetDone(item, !item.done)
+            } label: {
+                SidebarCheckbox(checked: item.done)
+                    // HIG ≥24pt target around the 14pt box.
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
-            .opacity(item.done ? 0.5 : 1)
-            // HIG ≥24pt target, like CalendarRow.
-            .frame(minHeight: 24)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(doneLabel)
+            .accessibilityLabel(doneLabel)
+            .accessibilityAddTraits(item.done ? .isSelected : [])
+            Button(action: openProfile) {
+                HStack(spacing: 8) {
+                    Text(item.name)
+                        .font(CWT.ui(13))
+                        .foregroundStyle(CWT.ink)
+                        .strikethrough(item.done, color: CWT.inkSoft)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    if let reason = item.reason, !reason.isEmpty {
+                        Text(reason)
+                            .font(CWT.ui(11))
+                            .foregroundStyle(CWT.inkFaint)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .opacity(item.done ? 0.5 : 1)
+                // HIG ≥24pt target, like CalendarRow.
+                .frame(minHeight: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(item.reason.map { "\(item.name) — \($0)" } ?? item.name)
+            Button {
+                store.replaceCallSheetPerson(item)
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(CWT.ui(11))
+                    .foregroundStyle(CWT.inkSoft)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            #if os(macOS)
+            .opacity(hovering || swapping ? 1 : 0)
+            #endif
+            .help("Someone else")
+            .accessibilityLabel("Swap \(item.name) for someone else")
         }
-        .buttonStyle(.plain)
-        .help(item.reason.map { "\(item.name) — \($0)" } ?? item.name)
+        .padding(.leading, -5)
+        .opacity(swapping ? 0.4 : 1)
+        .disabled(swapping)
+        .cwtRowHighlight()
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
+        .contextMenu {
+            Button(item.done ? "Mark not done" : "Mark done") { store.setCallSheetDone(item, !item.done) }
+            Button("Get someone else") { store.replaceCallSheetPerson(item) }
+            Divider()
+            Button("Open profile", action: openProfile)
+        }
+    }
+}
+
+/// The sidebar's square checkbox (FOCUS sets, call sheet): ink fill and a
+/// paper check when on, a soft outline when off.
+struct SidebarCheckbox: View {
+    let checked: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 3, style: .continuous)
+        shape
+            .fill(checked ? AnyShapeStyle(CWT.ink) : AnyShapeStyle(Color.clear))
+            .overlay(shape.strokeBorder(checked ? CWT.ink : CWT.inkSoft, lineWidth: 1))
+            .frame(width: 14, height: 14)
+            .overlay {
+                if checked {
+                    Image(systemName: "checkmark")
+                        .font(CWT.ui(9))
+                        .foregroundStyle(CWT.paper)
+                }
+            }
     }
 }
 
@@ -316,17 +386,7 @@ struct CalendarSetRow: View {
             store.apply(set)
         } label: {
             HStack(spacing: 8) {
-                Rectangle()
-                    .fill(active ? AnyShapeStyle(CWT.ink) : AnyShapeStyle(Color.clear))
-                    .overlay(Rectangle().strokeBorder(active ? CWT.ink : CWT.inkSoft, lineWidth: 1))
-                    .frame(width: 14, height: 14)
-                    .overlay {
-                        if active {
-                            Image(systemName: "checkmark")
-                                .font(CWT.ui(9))
-                                .foregroundStyle(CWT.paper)
-                        }
-                    }
+                SidebarCheckbox(checked: active)
                 Text(set.name)
                     .font(CWT.ui(13, bold: active))
                     .foregroundStyle(CWT.ink)
@@ -341,6 +401,7 @@ struct CalendarSetRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .cwtRowHighlight(selected: active)
         .help("Show only this set's calendars")
         .accessibilityAddTraits(active ? .isSelected : [])
         .contextMenu {
@@ -407,7 +468,7 @@ struct CalendarRow: View {
                 store.toggle(cal)
             } label: {
                 HStack(spacing: 8) {
-                    Rectangle()
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(cal.displayColor.opacity(store.isVisible(cal) ? 1 : 0.25))
                         .frame(width: 14, height: 14)
                         .overlay {
@@ -445,6 +506,7 @@ struct CalendarRow: View {
             .help("Change color")
             .accessibilityLabel("Change color")
         }
+        .cwtRowHighlight()
         #if os(macOS)
         .onHover { hovering = $0 }
         #endif
@@ -560,7 +622,8 @@ struct MiniMonthView: View {
                         .frame(maxWidth: .infinity, minHeight: 24)
                         .background {
                             if isSelected {
-                                Rectangle().fill(Color.accentColor.opacity(0.18))
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.accentColor.opacity(0.18))
                             }
                         }
                         .foregroundStyle(isToday ? CWT.signalRed : inMonth ? Color.primary : CWT.inkSoft.opacity(0.5))

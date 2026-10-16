@@ -378,9 +378,9 @@ struct DayColumn: View {
             #endif
 
             if let s = draftStart, let e = draftEnd {
-                Rectangle()
+                CWT.eventShape()
                     .fill(draftColor.opacity(0.22))
-                    .overlay(Rectangle().strokeBorder(draftColor.opacity(0.6)))
+                    .overlay(CWT.eventShape().strokeBorder(draftColor.opacity(0.6)))
                     .frame(width: colWidth - 6, height: max(abs(e - s), 10))
                     .offset(x: 2, y: min(s, e))
                     .allowsHitTesting(false)
@@ -395,9 +395,9 @@ struct DayColumn: View {
                 if s < dayEnd, e > dayStart {
                     let y = CGFloat(max(s, dayStart).timeIntervalSince(dayStart) / 3600) * hourHeight
                     let h = CGFloat(min(e, dayEnd).timeIntervalSince(max(s, dayStart)) / 3600) * hourHeight
-                    Rectangle()
+                    CWT.eventShape()
                         .fill(Color.accentColor.opacity(0.22))
-                        .overlay(Rectangle().strokeBorder(Color.accentColor.opacity(0.6)))
+                        .overlay(CWT.eventShape().strokeBorder(Color.accentColor.opacity(0.6)))
                         .frame(width: colWidth - 6, height: max(h, 10))
                         .offset(x: 2, y: y)
                         .allowsHitTesting(false)
@@ -408,9 +408,9 @@ struct DayColumn: View {
                 let dayStart = appState.calendar.startOfDay(for: day)
                 let y = CGFloat(slot.start.timeIntervalSince(dayStart) / 3600) * hourHeight
                 let h = CGFloat(slot.end.timeIntervalSince(slot.start) / 3600) * hourHeight
-                Rectangle()
+                CWT.eventShape()
                     .fill(CWT.signalGreen.opacity(0.25))
-                    .overlay(Rectangle().strokeBorder(CWT.signalGreen.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [4])))
+                    .overlay(CWT.eventShape().strokeBorder(CWT.signalGreen.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [4])))
                     .frame(width: colWidth - 6, height: max(h, 8))
                     .offset(x: 2, y: y)
                     .onTapGesture {
@@ -588,7 +588,7 @@ struct EventBlockView: View {
         .padding(.trailing, 4)
         .padding(.vertical, 3)
         .frame(width: max(subWidth - 2, 12), height: height, alignment: .topLeading)
-        .background(Rectangle().fill(color.opacity(
+        .background(CWT.eventShape().fill(color.opacity(
             awaiting ? 0.07 : isSelected ? 0.28 : 0.16
         )))
         .overlay(alignment: .leading) {
@@ -596,14 +596,14 @@ struct EventBlockView: View {
             CalendarStrips(copies: copies)
                 .padding(.vertical, 1)
         }
-        .clipShape(Rectangle())
+        .clipShape(CWT.eventShape())
         .overlay { if item.event.myParticipantStatus == .declined { DeclinedSlash(color: color) } }
         .overlay {
             if awaiting {
-                Rectangle()
+                CWT.eventShape()
                     .strokeBorder(color, style: StrokeStyle(lineWidth: isSelected ? 1.8 : 1.2, dash: [4, 3]))
             } else if isSelected {
-                Rectangle().strokeBorder(color, lineWidth: 1.5)
+                CWT.eventShape().strokeBorder(color, lineWidth: 1.5)
             }
         }
         .overlay(alignment: .top) {

@@ -394,7 +394,7 @@ struct EventPanelView: View {
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(6)
-                                    .background(CWT.paper2, in: Rectangle())
+                                    .background(CWT.paper2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 if !isReadOnly {
                                     Button("Edit notes") { editingNotes = true }
                                         .buttonStyle(.plain)
@@ -406,7 +406,7 @@ struct EventPanelView: View {
                                     .font(CWT.ui(13))
                                     .frame(minHeight: 70)
                                     .scrollContentBackground(.hidden)
-                                    .background(CWT.paper2, in: Rectangle())
+                                    .background(CWT.paper2, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                                     .disabled(isReadOnly)
                             }
                         }
@@ -436,7 +436,9 @@ struct EventPanelView: View {
         }
         // Controls (buttons, pickers, toggles) don't inherit the root font.
         .font(CWT.ui(13))
-        .background(BackgroundColor())
+        // As a sheet it's the page; inline, the host floats it on a glass
+        // card (RootView), so it paints nothing of its own.
+        .background { if isSheet { CWT.paper } }
         .onChange(of: start) { oldValue, newValue in
             end = end.addingTimeInterval(newValue.timeIntervalSince(oldValue))
         }
@@ -657,12 +659,6 @@ enum HTMLNotes {
             attr.characters.removeLast()
         }
         return attr
-    }
-}
-
-private struct BackgroundColor: View {
-    var body: some View {
-        CWT.paper
     }
 }
 

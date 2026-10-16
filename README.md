@@ -49,7 +49,7 @@ Hooks into a [Personal OS](https://personal-os-two-gold.vercel.app) instance —
 
 - **Two-way EC todos:** todo events get a checkbox on their all-day bar (click to mark done / not done; dropped todos show a struck, inactive box), plus the same in the right-click menu and the event panel. Dragging a todo to another day (or editing its date, or undoing a move) moves the todo's due date too.
 - **Follow-up todos:** right-click any other event (or use its panel button, or ⌘K with the event open) → **Follow up in Personal OS** creates "Follow up: *event title*" due the next weekday, with the time and attendees in the notes and a link back to the event.
-- **Call sheet:** today's people to call appear in the sidebar under CALL SHEET (click opens their profile), refreshed with every sync.
+- **Call sheet:** today's people to call appear in the sidebar under CALL SHEET, refreshed with every sync. Tick a person's checkbox to mark them done (again to undo); click the name to open their profile. **Get someone else** (the ⟳ swap control on hover — always shown on iOS — or right-click) asks Personal OS to swap that person for another; if nobody's left to swap in, its message shows as a toast.
 
 The token is stored locally with the rest of the app's settings, like the Google tokens.
 

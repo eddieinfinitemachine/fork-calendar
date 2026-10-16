@@ -39,7 +39,8 @@ struct RootView: View {
                         .toolbar(removing: .sidebarToggle)
                         #endif
                 } detail: {
-                    // Drawer overlays the calendar instead of pushing it aside.
+                    // Drawer overlays the calendar instead of pushing it aside:
+                    // a floating glass card inset from the window edges.
                     CalendarDetailView()
                         .overlay(alignment: .trailing) {
                             if let ctx = appState.panelContext {
@@ -47,7 +48,8 @@ struct RootView: View {
                                     .id(ctx.id)
                                     .frame(width: 320)
                                     .frame(maxHeight: .infinity)
-                                    .overlay(alignment: .leading) { CWT.rule.frame(width: 1) }
+                                    .cwtCard()
+                                    .padding(CWT.cardMargin)
                                     .transition(.move(edge: .trailing))
                             }
                         }
@@ -94,10 +96,10 @@ struct RootView: View {
             if let toast = appState.toast {
                 Text(toast)
                     .font(CWT.ui(12))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(CWT.paper)
-                    .overlay(Rectangle().strokeBorder(CWT.ink, lineWidth: 1))
+                    .foregroundStyle(CWT.ink)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .cwtCard(in: Capsule())
                     .padding(14)
                     .task {
                         try? await Task.sleep(nanoseconds: 4_000_000_000)
@@ -200,8 +202,9 @@ struct CalendarDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // No rule under the header: its glass controls float over the
+            // page rather than sitting in a ruled strip.
             HeaderBar()
-            Divider()
             if store.accessState == .denied {
                 AccessDeniedView()
             } else {
@@ -384,7 +387,7 @@ struct HeaderBar: View {
                     .controlSize(.mini)
                     .padding(.trailing, 2)
             }
-            HStack(spacing: 4) {
+            CWTGlassGroup {
                 #if os(macOS)
                 // ‹ Today › — ←/→ already step; this makes paging visible.
                 // (iOS pages by swipe, and its header has no room.)
@@ -414,45 +417,48 @@ struct HeaderBar: View {
                 #endif
             }
             viewMenu
-            Button {
-                appState.toggleAvailabilityMode()
-            } label: {
-                Image(systemName: "square.and.arrow.up.on.square")
-                    .frame(minWidth: Self.iconMinWidth)
-            }
-            .buttonStyle(.cwt(on: appState.availabilityMode))
-            .prominentLabel(appState.availabilityMode)
-            .help("Share availability (S)")
-            .accessibilityLabel("Share availability")
-            Button {
-                appState.paletteOpen = true
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .frame(minWidth: Self.iconMinWidth)
-            }
-            .buttonStyle(.cwt)
-            .help("Search & commands (⌘K)")
-            .accessibilityLabel("Search & commands")
-            // No accounts yet: a disabled prominent button renders nearly invisible
-            // on iOS, so show a plain one that leads to Settings instead.
-            Button {
-                if store.accessState == .granted {
-                    appState.newEvent(store: store)
-                } else {
-                    #if os(iOS)
-                    appState.showSettingsSheet = true
-                    #else
-                    openSettings()
-                    #endif
+            // Icon actions share one glass group, like a system toolbar's.
+            CWTGlassGroup {
+                Button {
+                    appState.toggleAvailabilityMode()
+                } label: {
+                    Image(systemName: "square.and.arrow.up.on.square")
+                        .frame(minWidth: Self.iconMinWidth)
                 }
-            } label: {
-                Image(systemName: "plus")
-                    .frame(minWidth: Self.iconMinWidth)
+                .buttonStyle(.cwt(on: appState.availabilityMode))
+                .prominentLabel(appState.availabilityMode)
+                .help("Share availability (S)")
+                .accessibilityLabel("Share availability")
+                Button {
+                    appState.paletteOpen = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .frame(minWidth: Self.iconMinWidth)
+                }
+                .buttonStyle(.cwt)
+                .help("Search & commands (⌘K)")
+                .accessibilityLabel("Search & commands")
+                // No accounts yet: a disabled prominent button renders nearly invisible
+                // on iOS, so show a plain one that leads to Settings instead.
+                Button {
+                    if store.accessState == .granted {
+                        appState.newEvent(store: store)
+                    } else {
+                        #if os(iOS)
+                        appState.showSettingsSheet = true
+                        #else
+                        openSettings()
+                        #endif
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(minWidth: Self.iconMinWidth)
+                }
+                .buttonStyle(.cwt(on: store.accessState == .granted))
+                .prominentLabel(store.accessState == .granted)
+                .help(store.accessState == .granted ? "New event (C)" : "Add a Google account in Settings")
+                .accessibilityLabel(store.accessState == .granted ? "New event" : "Add a Google account in Settings")
             }
-            .buttonStyle(.cwt(on: store.accessState == .granted))
-            .prominentLabel(store.accessState == .granted)
-            .help(store.accessState == .granted ? "New event (C)" : "Add a Google account in Settings")
-            .accessibilityLabel(store.accessState == .granted ? "New event" : "Add a Google account in Settings")
         }
         // Bordered controls don't inherit the root environment font.
         .font(CWT.ui(12))
@@ -540,10 +546,10 @@ struct AvailabilityBar: View {
                 .help("Esc")
         }
         .font(CWT.ui(12))
+        .foregroundStyle(CWT.ink)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(CWT.paper)
-        .overlay(Rectangle().strokeBorder(CWT.ink, lineWidth: 1))
+        .cwtCard(in: Capsule())
     }
 }
 

@@ -9,7 +9,9 @@ import UIKit
 /// CW&T design system tokens, restyled to match Knife Terminal:
 /// Helvetica Now Text for the chrome, JetBrains Mono for the hour gutter,
 /// Ghostty's stock dark palette and its "Tomorrow" light sibling, hairline
-/// rules, zero radius, color reserved for status.
+/// rules, color reserved for status. Materials follow Liquid Glass: the
+/// control / navigation layer (buttons, header groups, floating cards) is
+/// glass; content (event blocks, the grid, month cells) stays solid paper.
 enum CWT {
     // MARK: Color
 
@@ -86,6 +88,30 @@ enum CWT {
     static func mono(_ size: CGFloat, bold: Bool = false) -> Font {
         .custom(bold ? "JetBrainsMono-Bold" : "JetBrainsMono-Regular", fixedSize: size)
     }
+
+    // MARK: Shape & material
+
+    /// Floating cards (event panel, ⌘K, toast): Liquid Glass's large
+    /// continuous corners.
+    static let cardRadius: CGFloat = 20
+    /// Inset between a floating card and the window edge.
+    static let cardMargin: CGFloat = 10
+    /// Paper laid between a card's glass and its text: keeps body text
+    /// ≥4.5:1 however busy the grid behind it is.
+    static let cardScrim: Double = 0.65
+
+    /// Event blocks and all-day bars — solid content, softened to sit with
+    /// the capsule controls. Compact = month chips and 14pt month bars.
+    static func eventShape(compact: Bool = false) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: compact ? 4 : 6, style: .continuous)
+    }
+
+    /// The system's Liquid Glass is available (macOS 26 / iOS 26); before
+    /// that `cwtGlass` draws a blur material instead.
+    static var nativeGlass: Bool {
+        if #available(macOS 26.0, iOS 26.0, *) { return true }
+        return false
+    }
 }
 
 extension View {
@@ -101,11 +127,138 @@ extension View {
     }
 }
 
+// MARK: - Glass
+
+/// Liquid Glass for the control / navigation layer — never for content.
+/// macOS 26 / iOS 26 get the system glass (`interactive` adds its press
+/// response, `tint` makes it prominent); earlier systems get a blur
+/// material in the same shape with a hairline top light; Reduce
+/// Transparency gets an opaque paper fill. Callers never branch.
+struct CWTGlass<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var interactive = false
+    var tint: Color?
+    /// Paper between the glass and the content, for text-heavy surfaces.
+    var scrim: Double = 0
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content
+                .background(tint ?? CWT.paper2, in: shape)
+                .overlay(shape.strokeBorder(CWT.rule, lineWidth: 1))
+        } else if #available(macOS 26.0, iOS 26.0, *) {
+            content
+                .background(CWT.paper.opacity(scrim), in: shape)
+                .glassEffect(glass, in: shape)
+        } else {
+            content
+                .background(CWT.paper.opacity(scrim), in: shape)
+                .background(tint ?? .clear, in: shape)
+                .background(scrim > 0 ? .regularMaterial : .ultraThinMaterial, in: shape)
+                // Light catching the top edge, a faint shade along the bottom.
+                .overlay(shape.strokeBorder(LinearGradient(
+                    colors: [.white.opacity(colorScheme == .dark ? 0.25 : 0.6), CWT.ink.opacity(0.12)],
+                    startPoint: .top, endPoint: .bottom), lineWidth: 0.5))
+        }
+    }
+
+    @available(macOS 26.0, iOS 26.0, *)
+    private var glass: Glass {
+        var glass = Glass.regular
+        if let tint { glass = glass.tint(tint) }
+        if interactive { glass = glass.interactive() }
+        return glass
+    }
+}
+
+/// Hides everything inside a shape — lets a card cast a shadow without
+/// darkening its own translucent glass (or shadowing its text).
+private struct OutsideOf<S: Shape>: Shape {
+    let shape: S
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect.insetBy(dx: -80, dy: -80))
+        path.addPath(shape.path(in: rect))
+        return path
+    }
+}
+
+extension View {
+    /// Glass behind this view in `shape` (see `CWTGlass`).
+    func cwtGlass<S: InsettableShape>(in shape: S, interactive: Bool = false,
+                                      tint: Color? = nil, scrim: Double = 0) -> some View {
+        modifier(CWTGlass(shape: shape, interactive: interactive, tint: tint, scrim: scrim))
+    }
+
+    /// Floating glass card: clipped to `shape`, glass with a paper scrim
+    /// so text stays legible, and a soft shadow. Callers inset it from the
+    /// window edges (`CWT.cardMargin`).
+    func cwtCard<S: InsettableShape>(in shape: S) -> some View {
+        clipShape(shape)
+            .cwtGlass(in: shape, scrim: CWT.cardScrim)
+            .background {
+                shape.fill(Color.black)
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+                    .mask(OutsideOf(shape: shape).fill(style: FillStyle(eoFill: true)))
+                    .allowsHitTesting(false)
+            }
+    }
+
+    func cwtCard(radius: CGFloat = CWT.cardRadius) -> some View {
+        cwtCard(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+
+    /// Soft rounded wash behind a sidebar row: a light ink tint when
+    /// selected, lighter on hover (macOS) — no hard-edged fills.
+    func cwtRowHighlight(selected: Bool = false) -> some View {
+        modifier(CWTRowHighlight(selected: selected))
+    }
+}
+
+private struct CWTRowHighlight: ViewModifier {
+    let selected: Bool
+    @State private var hover = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(CWT.ink.opacity(selected ? 0.09 : hover ? 0.05 : 0))
+                    // Bleed into the list's row inset so the wash frames the row.
+                    .padding(.horizontal, -6)
+            }
+            #if os(macOS)
+            .onHover { hover = $0 }
+            #endif
+    }
+}
+
+/// Related controls that read as one: on macOS 26 / iOS 26 their glass
+/// capsules sit in one `GlassEffectContainer` and flow together like a
+/// system toolbar group; earlier, a tight row of separate capsules.
+struct CWTGlassGroup<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if #available(macOS 26.0, iOS 26.0, *) {
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 2) { content }
+            }
+        } else {
+            HStack(spacing: 4) { content }
+        }
+    }
+}
+
 // MARK: - Controls
 
-/// Knife's foot-button look: square, 1px-bordered, chrome type; hover tints,
-/// press darkens, `on` inverts (ink fill, paper text). Shared by
-/// `CWTButtonStyle` and `cwtFace()` so a `Menu` label matches the buttons.
+/// Glass capsule button face, chrome type: hover and press wash the glass
+/// (on macOS 26 / iOS 26 the interactive glass adds its own press
+/// response; earlier, a slight shrink), `on` is prominent — accent-tinted
+/// glass, paper text. Shared by `CWTButtonStyle` and `cwtFace()` so a
+/// `Menu` label matches the buttons.
 struct CWTFace: ViewModifier {
     var on = false
     var size: CGFloat = 12
@@ -123,10 +276,11 @@ struct CWTFace: ViewModifier {
             .padding(.horizontal, 10).padding(.vertical, 5)
             // HIG macOS minimum hit target.
             .frame(minHeight: 24)
-            .background(on ? CWT.ink.opacity(pressed ? 0.7 : 0.9)
-                           : CWT.ink.opacity(pressed ? 0.16 : hover && isEnabled ? 0.07 : 0))
-            .overlay(Rectangle().stroke(CWT.ink.opacity(on ? 0.9 : 0.35), lineWidth: 1))
-            .contentShape(Rectangle())
+            .background(CWT.ink.opacity(pressed ? 0.12 : hover && isEnabled ? 0.05 : 0), in: Capsule())
+            .cwtGlass(in: Capsule(), interactive: isEnabled, tint: on ? CWT.accent : nil)
+            .contentShape(Capsule())
+            .scaleEffect(pressed && !CWT.nativeGlass ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.12), value: pressed)
             .opacity(isEnabled ? 1 : 0.4)
             .onHover { hover = $0 }
     }

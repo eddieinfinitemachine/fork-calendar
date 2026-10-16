@@ -18,7 +18,7 @@ final class PersonalOS: ObservableObject {
         let personId: String
         let name: String
         let reason: String?
-        let done: Bool
+        var done: Bool
         /// Absolute link to the person's profile.
         let url: String
         var id: String { personId }
@@ -42,6 +42,9 @@ final class PersonalOS: ObservableObject {
 
     @Published private(set) var callSheet: [CallSheetItem] = []
     @Published private(set) var callSheetError: String?
+    /// People with a swap in flight: their rows dim and lock until the
+    /// server answers with who replaces them.
+    @Published private(set) var callSheetSwapping: Set<String> = []
     /// Both URL and token set. Mirrors `AppSettings`; drives every UI piece.
     @Published private(set) var isConfigured = false
     /// Completion flips sent to the server but not yet visible in the synced
@@ -108,6 +111,32 @@ final class PersonalOS: ObservableObject {
         } catch {
             callSheetError = error.localizedDescription
         }
+    }
+
+    /// Check a person off today's sheet (or back on). Optimistic: the row
+    /// flips now, then takes the server's sheet; a failure flips it back.
+    func setCallSheetDone(personId: String, _ done: Bool) async throws {
+        if let i = callSheet.firstIndex(where: { $0.personId == personId }) { callSheet[i].done = done }
+        do {
+            let sheet: CallSheet = try decode(await send("POST", "api/capture/call-sheet/today",
+                                                         body: ["personId": personId, "done": done]))
+            callSheet = sheet.items
+        } catch {
+            // Only that row: a refresh may have replaced the rest meanwhile.
+            if let i = callSheet.firstIndex(where: { $0.personId == personId }) { callSheet[i].done = !done }
+            throw error
+        }
+    }
+
+    /// "Get someone else": the server swaps this person for another one.
+    /// Not optimistic — who comes back is the server's pick — so the row
+    /// sits in `callSheetSwapping` until the new sheet arrives.
+    func replaceCallSheetPerson(personId: String) async throws {
+        callSheetSwapping.insert(personId)
+        defer { callSheetSwapping.remove(personId) }
+        let sheet: CallSheet = try decode(await send("POST", "api/capture/call-sheet/today",
+                                                     body: ["personId": personId, "replace": true]))
+        callSheet = sheet.items
     }
 
     /// Fire-and-forget refresh for the store's sync triggers (launch, ⌘R,
@@ -323,6 +352,26 @@ extension CalendarStore {
         }
     }
 
+    func setCallSheetDone(_ item: PersonalOS.CallSheetItem, _ done: Bool) {
+        Task {
+            do {
+                try await PersonalOS.shared.setCallSheetDone(personId: item.personId, done)
+            } catch {
+                toast = "Personal OS: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func replaceCallSheetPerson(_ item: PersonalOS.CallSheetItem) {
+        Task {
+            do {
+                try await PersonalOS.shared.replaceCallSheetPerson(personId: item.personId)
+            } catch {
+                toast = "Personal OS: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func followUpInPersonalOS(_ event: CalEvent) {
         Task {
             do {
@@ -377,9 +426,9 @@ struct PersonalOSCheckbox: View {
             Button {
                 store.setPersonalOSCompleted(event, state != .done)
             } label: {
-                Rectangle()
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(state == .done ? AnyShapeStyle(color) : AnyShapeStyle(Color.clear))
-                    .overlay(Rectangle().strokeBorder(color, lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(color, lineWidth: 1))
                     .overlay {
                         if state == .done {
                             Image(systemName: "checkmark")

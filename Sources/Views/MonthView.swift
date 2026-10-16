@@ -573,13 +573,13 @@ struct MonthChip: View {
         }
         .padding(.horizontal, 3)
         .padding(.vertical, 1)
-        .background(Rectangle().fill(
+        .background(CWT.eventShape(compact: true).fill(
             isDragging ? color.opacity(0.35) : color.opacity(isSelected ? 0.3 : event.isAllDay ? 0.16 : 0)
         ))
         .overlay { if event.myParticipantStatus == .declined { DeclinedSlash(color: color) } }
         .overlay {
             if event.needsMyResponse {
-                Rectangle()
+                CWT.eventShape(compact: true)
                     .strokeBorder(color, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
             }
         }
