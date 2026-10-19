@@ -107,28 +107,40 @@ struct RootView: View {
                     }
             }
         }
-        .confirmationDialog(
-            "This is a repeating event.",
-            isPresented: $appState.showSpanDialog,
-            titleVisibility: .visible
-        ) {
-            Button("This event only") { appState.resolveSpanAction(span: .thisEvent, store: store) }
-            Button("This and all future events") { appState.resolveSpanAction(span: .futureEvents, store: store) }
-            Button("Cancel", role: .cancel) { appState.resolveSpanAction(span: nil, store: store) }
+        // One presentation per host view: stacked confirmationDialog / alert
+        // modifiers on a single view only present one of them on macOS, which
+        // left the repeating-event delete dialog (and its delete) dead.
+        .background {
+            Color.clear
+                .confirmationDialog(
+                "This is a repeating event.",
+                isPresented: $appState.showSpanDialog,
+                titleVisibility: .visible
+            ) {
+                Button("This event only") { appState.resolveSpanAction(span: .thisEvent, store: store) }
+                Button("This and all future events") { appState.resolveSpanAction(span: .futureEvents, store: store) }
+                Button("Cancel", role: .cancel) { appState.resolveSpanAction(span: nil, store: store) }
+            }
         }
-        .confirmationDialog(
-            store.notifyPrompt.map { "\($0.title) — email \($0.guestCount == 1 ? "the guest" : "\($0.guestCount) guests")?" } ?? "",
-            isPresented: Binding(get: { store.notifyPrompt != nil }, set: { if !$0 { store.resolveNotifyPrompt(false) } }),
-            titleVisibility: .visible
-        ) {
-            Button("Send email") { store.resolveNotifyPrompt(true) }
-            Button("Don't send") { store.resolveNotifyPrompt(false) }
-        } message: {
-            Text("Google notifies guests by email. You can change the default in Settings.")
+        .background {
+            Color.clear
+                .confirmationDialog(
+                store.notifyPrompt.map { "\($0.title) — email \($0.guestCount == 1 ? "the guest" : "\($0.guestCount) guests")?" } ?? "",
+                isPresented: Binding(get: { store.notifyPrompt != nil }, set: { if !$0 { store.resolveNotifyPrompt(false) } }),
+                titleVisibility: .visible
+            ) {
+                Button("Send email") { store.resolveNotifyPrompt(true) }
+                Button("Don't send") { store.resolveNotifyPrompt(false) }
+            } message: {
+                Text("Google notifies guests by email. You can change the default in Settings.")
+            }
         }
-        .calendarSetNameAlert("Save calendar set", isPresented: $appState.showSaveCalendarSet,
-                              message: "Saves which calendars are showing now.") { name in
-            store.saveCurrentAsSet(named: name)
+        .background {
+            Color.clear
+                .calendarSetNameAlert("Save calendar set", isPresented: $appState.showSaveCalendarSet,
+                                      message: "Saves which calendars are showing now.") { name in
+                store.saveCurrentAsSet(named: name)
+            }
         }
         .onChange(of: store.toast) { _, message in
             if let message { appState.toast = message; store.toast = nil }

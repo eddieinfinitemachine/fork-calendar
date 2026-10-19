@@ -80,7 +80,7 @@ final class AppSettings: ObservableObject {
         syncOnActivate = d.object(forKey: "syncOnActivate") as? Bool ?? true
         calendarOrder = d.stringArray(forKey: "calendarOrder") ?? []
         rsvpNotifyOrganizer = d.object(forKey: "rsvpNotifyOrganizer") as? Bool ?? true
-        guestNotifyPolicy = GuestNotifyPolicy(rawValue: d.string(forKey: "guestNotifyPolicy") ?? "") ?? .ask
+        guestNotifyPolicy = GuestNotifyPolicy(rawValue: d.string(forKey: "guestNotifyPolicy") ?? "") ?? .never
         defaultCalendarID = d.string(forKey: "defaultCalendarID") ?? ""
         personalOSURL = d.string(forKey: "personalOSURL") ?? PersonalOS.defaultURL
         personalOSToken = d.string(forKey: "personalOSToken") ?? ""
