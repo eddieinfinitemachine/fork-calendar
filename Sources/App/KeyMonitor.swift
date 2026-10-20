@@ -150,7 +150,13 @@ enum KeyMonitor {
             switch event.keyCode {
             case 125: appState.palette.move(1); return true    // down
             case 126: appState.palette.move(-1); return true   // up
-            case 36, 76: appState.palette.confirmTick += 1; return true // return
+            case 36, 76: // return (⌘↩: ask Claude)
+                if event.modifierFlags.contains(.command) {
+                    appState.palette.askTick += 1
+                } else {
+                    appState.palette.confirmTick += 1
+                }
+                return true
             case 53: appState.paletteOpen = false; return true // esc
             default:
                 // FocusState on the palette's field can fail to land (the

@@ -62,6 +62,10 @@ final class AppSettings: ObservableObject {
     /// UserDefaults like the Google refresh tokens. Both set = integration on.
     @Published var personalOSURL: String { didSet { UserDefaults.standard.set(personalOSURL, forKey: "personalOSURL") } }
     @Published var personalOSToken: String { didSet { UserDefaults.standard.set(personalOSToken, forKey: "personalOSToken") } }
+    /// Claude assistant in ⌘K (optional): Anthropic API key — UserDefaults,
+    /// like the other tokens — and the model it runs on.
+    @Published var anthropicAPIKey: String { didSet { UserDefaults.standard.set(anthropicAPIKey, forKey: "anthropicAPIKey") } }
+    @Published var assistantModel: String { didSet { UserDefaults.standard.set(assistantModel, forKey: "assistantModel") } }
 
     private init() {
         let d = UserDefaults.standard
@@ -84,6 +88,8 @@ final class AppSettings: ObservableObject {
         defaultCalendarID = d.string(forKey: "defaultCalendarID") ?? ""
         personalOSURL = d.string(forKey: "personalOSURL") ?? PersonalOS.defaultURL
         personalOSToken = d.string(forKey: "personalOSToken") ?? ""
+        anthropicAPIKey = d.string(forKey: "anthropicAPIKey") ?? ""
+        assistantModel = d.string(forKey: "assistantModel") ?? AssistantModel.defaultID
     }
 
     // MARK: - Setup transfer (Mac → iPhone via Universal Clipboard)

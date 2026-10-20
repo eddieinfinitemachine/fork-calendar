@@ -47,6 +47,12 @@ enum UndoAction {
     case restore(id: String, snapshot: EventSnapshot)
     case recreate(snapshot: EventSnapshot)
     case remove(id: String)
+    /// Put my RSVP back (`instanceOnly`: one occurrence, not the series).
+    case rsvp(id: String, calendarKey: String, previous: ParticipantStatus, instanceOnly: Bool)
+    /// Several changes made as one batch (the assistant's confirmed plan):
+    /// one ⌘Z reverts them all, newest first. `notify` is the guest-email
+    /// answer the batch was made with, reused so undoing it asks nothing.
+    indirect case group([UndoAction], notify: Bool?)
 }
 
 /// A saved calendar focus set ("Work", "Just me"): a named visibility
@@ -114,6 +120,9 @@ final class CalendarStore: ObservableObject {
 
     private var fetchedInterval: DateInterval?
     private var undoStack: [UndoAction] = []
+    /// Inside `performBatch`: the batch's guest-email answer (nil = policy).
+    private var batchNotify: Bool?
+    private var batchDepth = 0
     private var dayIndexCache: [Date: [CalEvent]]?
     private var bag = Set<AnyCancellable>()
     private var timerTask: Task<Void, Never>?
@@ -604,11 +613,12 @@ final class CalendarStore: ObservableObject {
         }
         event.calendar = cal
         if event.title?.isEmpty ?? true { event.title = "New event" }
+        let forced = batchNotify
         if isNew || event.isLocal {
             engine.upsert(event.record())
             undoStack.append(.remove(id: event.id))
             reload()
-            Task { await pushInsert(event) }
+            Task { await pushInsert(event, notify: forced) }
         } else {
             let oldKey = snapshot?.calendarID ?? cal.calendarIdentifier
             let old = engine.record(id: event.id, calendarKey: oldKey)
@@ -638,7 +648,7 @@ final class CalendarStore: ObservableObject {
             if let snapshot { undoStack.append(.restore(id: event.id, snapshot: snapshot)) }
             reload()
             Task {
-                await pushUpdate(event, old: old, oldKey: oldKey, span: span, mirrored: mirroredOriginals)
+                await pushUpdate(event, old: old, oldKey: oldKey, span: span, mirrored: mirroredOriginals, notify: forced)
                 // Pull the server's propagation to the other calendars' copies.
                 engine.syncAll()
             }
@@ -656,7 +666,37 @@ final class CalendarStore: ObservableObject {
         }
         undoStack.append(.recreate(snapshot: snapshot))
         reload()
-        Task { await pushDelete(event, calendar: cal, span: span, notify: notify) }
+        let forced = batchNotify
+        Task { await pushDelete(event, calendar: cal, span: span, notify: notify, forced: forced) }
+    }
+
+    /// Make several changes as ONE undo step: every undo entry the body adds
+    /// is folded into a single `.group`, so one ⌘Z reverts the whole batch.
+    /// `notifyGuests` answers "email the guests?" once for every change in
+    /// the batch (nil = the Settings policy) — with the Ask policy, per-event
+    /// prompts would otherwise pile up (only one can be on screen).
+    func performBatch(notifyGuests: Bool?, _ body: () -> Void) {
+        let mark = undoStack.count
+        let outer = batchNotify
+        batchNotify = notifyGuests
+        batchDepth += 1
+        body()
+        batchDepth -= 1
+        batchNotify = outer
+        guard undoStack.count > mark else { return }
+        let added = Array(undoStack[mark...])
+        undoStack.removeSubrange(mark...)
+        undoStack.append(added.count == 1 ? added[0] : .group(added, notify: notifyGuests))
+    }
+
+    /// The event `id` on calendar `calendarKey` — the live object if it's
+    /// loaded, else rebuilt from the cache. (Ids alone can repeat across
+    /// calendars: an invite shows on each signed-in account with one id.)
+    func event(id: String, calendarKey: String) -> CalEvent? {
+        if let live = events.first(where: { $0.id == id && $0.calendar?.calendarIdentifier == calendarKey }) { return live }
+        guard let record = engine.record(id: id, calendarKey: calendarKey),
+              let cal = engine.calendar(forKey: calendarKey) else { return nil }
+        return CalEvent(record: record, calendar: cal)
     }
 
     func duplicate(_ event: CalEvent, dayOffset: Double = 0) {
@@ -687,6 +727,13 @@ final class CalendarStore: ObservableObject {
 
     func undo() {
         guard let action = undoStack.popLast() else { return }
+        perform(action, notify: nil)
+        if case .group(let list, _) = action {
+            toast = "Undone — \(list.count) changes reverted"
+        }
+    }
+
+    private func perform(_ action: UndoAction, notify forced: Bool?) {
         switch action {
         case .restore(let id, let snapshot):
             if let event = findEvent(id: id) {
@@ -697,7 +744,7 @@ final class CalendarStore: ObservableObject {
                 if oldKey != event.calendar?.calendarIdentifier { engine.remove(id: id, calendarKey: oldKey) }
                 engine.upsert(event.record())
                 reload()
-                Task { await pushUpdate(event, old: old, oldKey: oldKey, span: .thisEvent) }
+                Task { await pushUpdate(event, old: old, oldKey: oldKey, span: .thisEvent, notify: forced) }
             }
         case .recreate(let snapshot):
             let event = CalEvent()
@@ -709,13 +756,19 @@ final class CalendarStore: ObservableObject {
             guard event.calendar != nil else { return }
             engine.upsert(event.record())
             reload()
-            Task { await pushInsert(event) }
+            Task { await pushInsert(event, notify: forced) }
         case .remove(let id):
             if let event = findEvent(id: id), let cal = event.calendar {
                 engine.remove(id: id, calendarKey: cal.calendarIdentifier)
                 reload()
-                Task { await pushDelete(event, calendar: cal, span: .thisEvent, notify: true) }
+                Task { await pushDelete(event, calendar: cal, span: .thisEvent, notify: true, forced: forced) }
             }
+        case .rsvp(let id, let key, let previous, let instanceOnly):
+            if let event = self.event(id: id, calendarKey: key) {
+                Task { await respond(event, status: previous, instanceOnly: instanceOnly, quiet: true) }
+            }
+        case .group(let list, let notify):
+            for inner in list.reversed() { perform(inner, notify: notify) }
         }
     }
 
@@ -729,18 +782,35 @@ final class CalendarStore: ObservableObject {
 
     /// Remap a local id to the server's id in the undo stack.
     private func remapUndo(from old: String, to new: String) {
-        undoStack = undoStack.map {
-            switch $0 {
-            case .remove(let id) where id == old: return .remove(id: new)
-            case .restore(let id, let s) where id == old: return .restore(id: new, snapshot: s)
-            default: return $0
-            }
+        undoStack = undoStack.map { Self.remap($0, from: old, to: new) }
+    }
+
+    private static func remap(_ action: UndoAction, from old: String, to new: String) -> UndoAction {
+        switch action {
+        case .remove(let id) where id == old: return .remove(id: new)
+        case .restore(let id, let s) where id == old: return .restore(id: new, snapshot: s)
+        case .group(let list, let notify): return .group(list.map { remap($0, from: old, to: new) }, notify: notify)
+        default: return action
         }
     }
 
     // MARK: - RSVP
 
-    func respond(_ event: CalEvent, status: ParticipantStatus) async {
+    /// RSVP as an undoable step (the assistant's plan; one ⌘Z puts the old
+    /// answer back). `instanceOnly`: answer this occurrence, not the series.
+    func respondWithUndo(_ event: CalEvent, status: ParticipantStatus, instanceOnly: Bool) {
+        guard let cal = event.calendar, let previous = event.myParticipantStatus else {
+            toast = "You're not on “\(event.title ?? "this event")”'s guest list"
+            return
+        }
+        undoStack.append(.rsvp(id: event.id, calendarKey: cal.calendarIdentifier, previous: previous, instanceOnly: instanceOnly))
+        let quiet = batchDepth > 0
+        Task { await respond(event, status: status, instanceOnly: instanceOnly, quiet: quiet) }
+    }
+
+    /// `instanceOnly`: answer just this occurrence of a repeating event
+    /// (default: the whole series). `quiet`: no success toast (batches).
+    func respond(_ event: CalEvent, status: ParticipantStatus, instanceOnly: Bool = false, quiet: Bool = false) async {
         guard let cal = event.calendar else { return }
         guard var attendees = event.attendees, attendees.contains(where: { $0.isSelf }) else {
             toast = "You're not on this event's guest list (\(cal.accountID))"
@@ -749,11 +819,11 @@ final class CalendarStore: ObservableObject {
         for i in attendees.indices where attendees[i].isSelf { attendees[i].responseStatus = status }
         // Optimistic: every cached copy of the series/instance shows the answer
         let key = cal.calendarIdentifier
-        let targetID = event.recurringEventId ?? event.id
+        let targetID = instanceOnly ? event.id : (event.recurringEventId ?? event.id)
         let preChange = engine.record(id: targetID, calendarKey: key)
         event.attendees = attendees
         if let dict = engine.records[key] {
-            for (id, var r) in dict where id == event.id || r.recurringEventId == targetID {
+            for (id, var r) in dict where id == event.id || (!instanceOnly && r.recurringEventId == targetID) {
                 r.attendees = attendees
                 engine.upsert(r)
             }
@@ -768,7 +838,7 @@ final class CalendarStore: ObservableObject {
                 sendUpdates: sendUpdates, token: token
             )
             let label: String = status == .accepted ? "Going" : status == .tentative ? "Maybe" : "Not going"
-            toast = "RSVP sent: \(label)" + (sendUpdates == "none" ? " (organizer not emailed)" : "")
+            if !quiet { toast = "RSVP sent: \(label)" + (sendUpdates == "none" ? " (organizer not emailed)" : "") }
         } catch {
             if error.isRetryableOffline {
                 engine.enqueue(PendingOp(
@@ -791,10 +861,12 @@ final class CalendarStore: ObservableObject {
     // MARK: - Server writes
 
     /// Decide Google's sendUpdates for a change touching other guests.
-    private func sendUpdates(for event: CalEvent, old: EventRecord?, verb: String) async -> String {
+    /// `forced`: a batch's one answer (see `performBatch`), overriding the policy.
+    private func sendUpdates(for event: CalEvent, old: EventRecord?, verb: String, forced: Bool? = nil) async -> String {
         let guests = event.otherAttendees.count
         let hadGuests = (old?.attendees ?? []).contains { !$0.isSelf }
         guard guests > 0 || hadGuests else { return "none" }
+        if let forced { return forced ? "all" : "none" }
         switch AppSettings.shared.guestNotifyPolicy {
         case .always: return "all"
         case .never: return "none"
@@ -812,11 +884,11 @@ final class CalendarStore: ObservableObject {
         prompt.continuation.resume(returning: send)
     }
 
-    private func pushInsert(_ event: CalEvent) async {
+    private func pushInsert(_ event: CalEvent, notify forced: Bool? = nil) async {
         guard let cal = event.calendar else { return }
         let localID = event.id
         let wantedMeet = event.wantsMeet
-        let updates = await sendUpdates(for: event, old: nil, verb: "Invite guests to")
+        let updates = await sendUpdates(for: event, old: nil, verb: "Invite guests to", forced: forced)
         do {
             let token = try await accounts.validToken(for: cal.accountID)
             let created = try await GoogleCalendarAPI.insert(
@@ -852,10 +924,10 @@ final class CalendarStore: ObservableObject {
         }
     }
 
-    private func pushUpdate(_ event: CalEvent, old: EventRecord?, oldKey: String, span: EditSpan, mirrored: [EventRecord] = []) async {
+    private func pushUpdate(_ event: CalEvent, old: EventRecord?, oldKey: String, span: EditSpan, mirrored: [EventRecord] = [], notify forced: Bool? = nil) async {
         guard let cal = event.calendar else { return }
         let key = cal.calendarIdentifier
-        let updates = await sendUpdates(for: event, old: old, verb: "Update")
+        let updates = await sendUpdates(for: event, old: old, verb: "Update", forced: forced)
         do {
             let token = try await accounts.validToken(for: cal.accountID)
             var eventID = event.id
@@ -972,14 +1044,14 @@ final class CalendarStore: ObservableObject {
         await engine.resync(calendarKey: key)
     }
 
-    private func pushDelete(_ event: CalEvent, calendar cal: CalCalendar, span: EditSpan, notify: Bool) async {
+    private func pushDelete(_ event: CalEvent, calendar cal: CalCalendar, span: EditSpan, notify: Bool, forced: Bool? = nil) async {
         let key = cal.calendarIdentifier
         if event.isLocal {
             // Never reached the server — just cancel any queued insert.
             engine.cancelPending(eventID: event.id, calendarKey: key)
             return
         }
-        let updates = notify ? await sendUpdates(for: event, old: nil, verb: "Cancel") : "none"
+        let updates = notify ? await sendUpdates(for: event, old: nil, verb: "Cancel", forced: forced) : "none"
         do {
             let token = try await accounts.validToken(for: cal.accountID)
             if span == .futureEvents, let masterID = event.recurringEventId {

@@ -53,6 +53,18 @@ Hooks into a [Personal OS](https://personal-os-two-gold.vercel.app) instance —
 
 The token is stored locally with the rest of the app's settings, like the Google tokens.
 
+## Claude assistant (optional)
+
+Type what you want in ⌘K and let Claude do it: "schedule a 30 min meeting with Amy Thursday afternoon", "cancel my meetings this week", "what's on Friday?", "move standup to 10". Off until you set it up: Settings (⌘,) → **Claude assistant** → paste an [Anthropic API key](https://console.anthropic.com/settings/keys), pick a model (Claude Opus 5.5 by default; Sonnet 5.5 and Haiku 5.5 are faster), then **Test**.
+
+- With a key set, ⌘K shows an **Ask Claude** row for whatever you've typed (⌘↩ sends it straight away). Quick add, commands and event search work as before.
+- Claude looks at your calendars (events, free time, people you meet with) to work out a plan. **It never changes anything on its own:** the palette lists exactly what will happen ("Delete · Weekly Leads · Tue 12:00–1:15 PM · 4 guests (no email)", "Decline · … · tell organizer", "Create · Coffee with Amy · Thu 3:00–3:30 PM · Work · invite amy@…"), and nothing happens until you press **Confirm** (↩). Esc discards it.
+- Cancelling: meetings you organize (or that have nobody else on them) are deleted; meetings someone else organizes are declined, never deleted. For a repeating meeting only that occurrence is touched. Guest and organizer emails follow your Settings.
+- If your request is ambiguous ("Amy" could be two people), Claude asks — type the answer in the same box. It only invites addresses that appear in your events or that you typed.
+- After you confirm, one ⌘Z undoes the whole batch.
+
+The key is stored locally with the app's other settings and sent only to `api.anthropic.com`; requests include the events Claude looks up. Never commit a key — this repo is public.
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -67,6 +79,7 @@ The token is stored locally with the rest of the app's settings, like the Google
 | C | Create event |
 | S | Share availability |
 | ⌘K | Search & commands |
+| ⌘↩ (in ⌘K) | Ask Claude (with an API key set) |
 | ⌘Z | Undo |
 | ⌘C / ⌘V | Copy selected event / paste it at the slot or day under the pointer |
 | ⌘N | New event |

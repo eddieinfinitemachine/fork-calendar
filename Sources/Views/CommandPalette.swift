@@ -7,6 +7,9 @@ struct PaletteItem: Identifiable {
     let subtitle: String?
     let icon: String
     let shortcut: String?
+    /// Runs with the palette still open (the Claude row: the conversation
+    /// happens inside the palette).
+    var keepsOpen = false
     let action: () -> Void
 }
 
@@ -22,8 +25,12 @@ private struct PaletteBody: View {
     @EnvironmentObject var store: CalendarStore
     @EnvironmentObject var appState: AppState
     @ObservedObject var model: PaletteModel
+    @ObservedObject private var assistant = Assistant.shared
     @FocusState private var focused: Bool
     @Environment(\.openURL) private var openURL
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     /// Results live in view state and are rebuilt through Combine
     /// subscriptions created ONCE in `onAppear` — not `onReceive` (whose
@@ -33,6 +40,9 @@ private struct PaletteBody: View {
     /// overlay's insertion could wedge that observation: the field kept
     /// accepting text while the list stayed stale).
     @State private var items: [PaletteItem] = []
+    /// The assistant panel's content height: the panel hugs short replies
+    /// and scrolls past 380pt.
+    @State private var assistantHeight: CGFloat = 44
     @State private var subs: [AnyCancellable] = []
 
     var body: some View {
@@ -55,9 +65,18 @@ private struct PaletteBody: View {
                     .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
                     .sink { _ in refresh() },
                 model.$confirmTick.dropFirst().receive(on: DispatchQueue.main).sink { _ in
+                    if assistant.isEngaged {
+                        assistantReturn()
+                        return
+                    }
                     guard items.indices.contains(model.index) else { return }
-                    appState.paletteOpen = false
-                    items[model.index].action()
+                    run(items[model.index])
+                },
+                // ⌘↩: always the assistant (a follow-up when a conversation is open).
+                model.$askTick.dropFirst().receive(on: DispatchQueue.main).sink { _ in
+                    let q = model.query.trimmingCharacters(in: .whitespaces)
+                    guard assistant.isConfigured, model.billing == nil, !q.isEmpty else { return }
+                    askClaude(q)
                 },
                 // The palette stays mounted for the window's whole life;
                 // each open resets the query and takes keyboard focus here.
@@ -70,11 +89,45 @@ private struct PaletteBody: View {
                     } else {
                         focused = false
                         model.billing = nil
+                        // Esc / closing ends the conversation (and cancels a run).
+                        assistant.reset()
                     }
                 },
             ]
         }
         .onDisappear { subs = [] }
+    }
+
+    private func run(_ item: PaletteItem) {
+        if !item.keepsOpen { appState.paletteOpen = false }
+        item.action()
+    }
+
+    private func askClaude(_ text: String) {
+        assistant.ask(text, store: store)
+        model.query = ""
+        focused = true
+    }
+
+    /// ↩ while a conversation is showing: send what's typed as the reply,
+    /// or confirm the plan when the field is empty.
+    private func assistantReturn() {
+        guard !assistant.isRunning else { return }
+        let q = model.query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty {
+            askClaude(q)
+        } else if !assistant.plan.isEmpty {
+            assistant.confirm(store: store, appState: appState)
+        }
+    }
+
+    private func openAssistantSettings() {
+        appState.paletteOpen = false
+        #if os(macOS)
+        openSettings()
+        #else
+        appState.showSettingsSheet = true
+        #endif
     }
 
     private func refresh() {
@@ -87,7 +140,11 @@ private struct PaletteBody: View {
         VStack(spacing: 0) {
             searchField
             Divider()
-            resultsList(items: items)
+            if assistant.isEngaged {
+                assistantPanel
+            } else {
+                resultsList(items: items)
+            }
             Divider()
             footer
         }
@@ -100,10 +157,12 @@ private struct PaletteBody: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(CWT.inkSoft)
-            TextField(model.billing.map { "Bill “\($0.title ?? "Untitled")” to draft invoice…" } ?? "Search events or type a command…", text: $model.query)
+            TextField(placeholder, text: $model.query)
                 .textFieldStyle(.plain)
                 .font(CWT.ui(16))
                 .focused($focused)
+                // macOS routes ↩ through KeyMonitor; this is iOS's return key.
+                .onSubmit { if assistant.isEngaged { assistantReturn() } }
         }
         .padding(14)
         .contentShape(Rectangle())
@@ -120,10 +179,7 @@ private struct PaletteBody: View {
                     ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                         PaletteRow(item: item, selected: i == model.index)
                             .id(i)
-                            .onTapGesture {
-                                appState.paletteOpen = false
-                                item.action()
-                            }
+                            .onTapGesture { run(item) }
                             .onHover2 { _ in model.index = i }
                     }
                     if items.isEmpty {
@@ -142,11 +198,31 @@ private struct PaletteBody: View {
         }
     }
 
+    private var placeholder: String {
+        if let event = model.billing { return "Bill “\(event.title ?? "Untitled")” to draft invoice…" }
+        if assistant.isEngaged { return assistant.plan.isEmpty ? "Reply to Claude…" : "Change something, or ↩ to confirm…" }
+        return "Search events or type a command…"
+    }
+
     private var footer: some View {
         HStack {
-            Text("↑↓ navigate")
-            Text("↩ select")
-            Text("esc close")
+            if assistant.isEngaged {
+                if assistant.isRunning {
+                    Text("esc cancel")
+                } else if !assistant.plan.isEmpty {
+                    Text("↩ confirm")
+                    Text("type to change the plan")
+                    Text("esc cancel")
+                } else {
+                    Text("↩ reply")
+                    Text("esc close")
+                }
+            } else {
+                Text("↑↓ navigate")
+                Text("↩ select")
+                if assistant.isConfigured, let hint = Self.macShortcut("⌘↩ ask Claude") { Text(hint) }
+                Text("esc close")
+            }
             Spacer()
         }
         .font(CWT.ui(10))
@@ -181,7 +257,8 @@ private struct PaletteBody: View {
         }
 
         // Natural-language quick add ("Lunch with Amy tomorrow 1pm")
-        if let parsed = QuickAdd.parse(q, defaultDurationMinutes: appState.settings.defaultDuration) {
+        let quickAdd = QuickAdd.parse(q, defaultDurationMinutes: appState.settings.defaultDuration)
+        if let parsed = quickAdd {
             items.append(PaletteItem(
                 title: "Create “\(parsed.title)”",
                 subtitle: "\(Fmt.dateTime.string(from: parsed.start)) – \(Fmt.time.string(from: parsed.end))",
@@ -193,7 +270,8 @@ private struct PaletteBody: View {
         }
 
         // "Go to date" natural entry
-        if let date = parseDate(q) {
+        let goTo = parseDate(q)
+        if let date = goTo {
             let f = DateFormatter()
             f.dateStyle = .full
             items.append(PaletteItem(title: "Go to \(f.string(from: date))", subtitle: nil, icon: "arrow.right.circle", shortcut: nil) {
@@ -229,15 +307,30 @@ private struct PaletteBody: View {
                 shortcut: i < 9 ? Self.macShortcut("⌥⌘\(i + 1)") : nil
             ) { store.apply(set) }
         } + personalOSCommands
-        if q.isEmpty {
-            items.append(contentsOf: commands)
-        } else {
-            items.append(contentsOf: commands.filter { $0.title.localizedCaseInsensitiveContains(q) })
-        }
+        let matchedCommands = q.isEmpty ? commands : commands.filter { $0.title.localizedCaseInsensitiveContains(q) }
+        items.append(contentsOf: matchedCommands)
 
         // Event search
-        if q.count >= 2 {
-            for event in store.searchEvents(q).prefix(12) {
+        let hits = q.count >= 2 ? Array(store.searchEvents(q).prefix(12)) : []
+
+        // Ask Claude: first when the text reads like a request rather than a
+        // command / event / quick add; otherwise after those matches (⌘↩
+        // sends it either way).
+        if assistant.isConfigured, !q.isEmpty {
+            let ask = PaletteItem(title: "Ask Claude: \(q)", subtitle: nil, icon: "sparkles",
+                                  shortcut: Self.macShortcut("⌘↩"), keepsOpen: true) { askClaude(q) }
+            let words = q.split(whereSeparator: \.isWhitespace)
+            let request = Self.requestWords.contains(words.first.map { $0.lowercased() } ?? "") || q.hasSuffix("?")
+            let weakMatch = quickAdd == nil && goTo == nil && (hits.isEmpty || words.count >= 4)
+            if matchedCommands.isEmpty && (request || weakMatch) {
+                items.insert(ask, at: 0)
+            } else {
+                items.append(ask)
+            }
+        }
+
+        if !hits.isEmpty {
+            for event in hits {
                 items.append(PaletteItem(
                     title: event.title ?? "Untitled",
                     subtitle: Fmt.dateTime.string(from: event.startDate) + (event.calendar.map { " · \($0.title)" } ?? ""),
@@ -251,6 +344,108 @@ private struct PaletteBody: View {
             }
         }
         return items
+    }
+
+    /// First words that make the text a request for Claude, not a quick add.
+    private static let requestWords: Set<String> = [
+        "schedule", "reschedule", "cancel", "move", "push", "decline", "accept", "rsvp", "book",
+        "find", "clear", "invite", "delete", "remove", "shift", "block", "set", "plan", "put",
+        "what", "what's", "whats", "when", "who", "how", "which", "do", "am", "is", "are",
+        "can", "could", "please", "make", "free", "skip", "drop",
+    ]
+
+    // MARK: - Assistant
+
+    private var assistantPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(assistant.prompts.enumerated()), id: \.offset) { _, prompt in
+                    Text(prompt)
+                        .font(CWT.ui(12))
+                        .foregroundStyle(CWT.inkSoft)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                switch assistant.phase {
+                case .running(let status):
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(status)
+                            .font(CWT.ui(13))
+                            .foregroundStyle(CWT.inkSoft)
+                    }
+                case .failed(let error):
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(error.localizedDescription, systemImage: "exclamationmark.triangle")
+                            .font(CWT.ui(13))
+                            .foregroundStyle(CWT.signalRed)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if error.needsSettings {
+                            Button("Open Settings") { openAssistantSettings() }
+                                .buttonStyle(.cwt(size: 12))
+                        }
+                    }
+                case .answered:
+                    if !assistant.reply.isEmpty {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "sparkles").foregroundStyle(CWT.accent)
+                            Text(Self.markdown(assistant.reply))
+                                .font(CWT.ui(13))
+                                .foregroundStyle(CWT.ink)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                case .idle:
+                    EmptyView()
+                }
+                if !assistant.plan.isEmpty, !assistant.isRunning {
+                    planPreview
+                }
+            }
+            .padding(14)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { assistantHeight = $0 }
+        }
+        .frame(height: min(max(assistantHeight, 44), 380))
+    }
+
+    private var planPreview: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 0) {
+                ForEach(Array(assistant.plan.enumerated()), id: \.element.id) { i, step in
+                    if i > 0 { Rectangle().fill(CWT.rule).frame(height: 1) }
+                    PlanRow(step: step)
+                }
+            }
+            .background(CWT.paper2.opacity(0.7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(CWT.rule, lineWidth: 1))
+            HStack(spacing: 8) {
+                if assistant.needsEmailChoice {
+                    Toggle("Email guests", isOn: $assistant.emailGuests)
+                        .font(CWT.ui(12))
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .tint(CWT.accent)
+                        .fixedSize()
+                }
+                Spacer()
+                Button("Cancel") { appState.paletteOpen = false }
+                    .buttonStyle(.cwt(size: 13))
+                    .help("Discard the plan (esc)")
+                Button {
+                    assistant.confirm(store: store, appState: appState)
+                } label: {
+                    Text(assistant.plan.count == 1 ? "Confirm" : "Confirm \(assistant.plan.count) changes")
+                }
+                .buttonStyle(.cwt(on: true, size: 13))
+                .prominentLabel()
+                .help("Make these changes (↩)")
+            }
+        }
+    }
+
+    private static func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
     }
 
     /// Personal OS actions on the selected event (open in the panel), like
@@ -313,6 +508,47 @@ private struct PaletteBody: View {
             }
         }
         return nil
+    }
+}
+
+/// One step of the assistant's plan: "Delete · Weekly Leads · Tue 12:00–1:15 PM · 4 guests (no email)".
+private struct PlanRow: View {
+    let step: PlannedAction
+
+    private var icon: String {
+        switch step.verb {
+        case "Delete": return "trash"
+        case "Decline": return "xmark.circle"
+        case "Create": return "plus.circle"
+        case "Move": return "arrow.right.circle"
+        case "Accept": return "checkmark.circle"
+        case "Maybe": return "questionmark.circle"
+        default: return "pencil.circle"
+        }
+    }
+
+    private var destructive: Bool { step.verb == "Delete" || step.verb == "Decline" }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon)
+                .frame(width: 16)
+                .foregroundStyle(destructive ? CWT.signalRed : CWT.inkSoft)
+            VStack(alignment: .leading, spacing: 2) {
+                (Text(step.verb).font(CWT.ui(13, bold: true)).foregroundColor(destructive ? CWT.signalRed : CWT.ink)
+                 + Text(" · " + step.title).font(CWT.ui(13)).foregroundColor(CWT.ink))
+                    .lineLimit(2)
+                Text(([step.when] + step.details).joined(separator: " · "))
+                    .font(CWT.ui(12))
+                    .foregroundStyle(CWT.inkSoft)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(step.summary)
     }
 }
 

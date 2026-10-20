@@ -9,6 +9,8 @@ struct SettingsView: View {
     @ObservedObject private var personalOS = PersonalOS.shared
     /// Inline result of "Test connection": nil = not run, "" = running.
     @State private var personalOSTest: String?
+    /// Inline result of the Claude key test: nil = not run, "" = running.
+    @State private var assistantTest: String?
 
     private static let timeZones = AppSettings.curatedTimeZones
 
@@ -31,6 +33,7 @@ struct SettingsView: View {
                 notifySection
                 generalSection
                 personalOSSection
+                assistantSection
             }
             .padding(16)
         }
@@ -301,6 +304,49 @@ struct SettingsView: View {
         }
         .onChange(of: settings.personalOSToken) { personalOSTest = nil }
         .onChange(of: settings.personalOSURL) { personalOSTest = nil }
+    }
+}
+
+// MARK: - Claude assistant
+
+extension SettingsView {
+    fileprivate var assistantSection: some View {
+        SettingsSection("Claude assistant") {
+            SettingsRow("Anthropic API key") {
+                SettingsSecureField("sk-ant-…", text: $settings.anthropicAPIKey)
+                    .frame(maxWidth: 260)
+            }
+            SettingsRow("Model") {
+                CWTMenuPicker(selection: $settings.assistantModel,
+                              options: AssistantModel.all.map { ($0.id, $0.label) }
+                                + (AssistantModel.all.contains { $0.id == settings.assistantModel }
+                                   ? [] : [(settings.assistantModel, settings.assistantModel)]))
+            }
+            HStack {
+                Button(assistantTest == "" ? "Testing…" : "Test") {
+                    assistantTest = ""
+                    let key = settings.anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let model = settings.assistantModel
+                    Task {
+                        let failure = await AnthropicTransport.test(apiKey: key, model: model)
+                        assistantTest = failure.map { "✗ \($0)" } ?? "OK — \(model) answered"
+                    }
+                }
+                .buttonStyle(.cwt(size: 13))
+                .disabled(settings.anthropicAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || assistantTest == "")
+                Spacer()
+                if let result = assistantTest, !result.isEmpty {
+                    Text(result)
+                        .font(CWT.ui(11))
+                        .foregroundStyle(result.hasPrefix("✗") ? CWT.signalRed : CWT.inkSoft)
+                        .lineLimit(3)
+                }
+            }
+            .settingsRow()
+            SettingsFootnote("Optional. With a key set, type a request in ⌘K (\"cancel my meetings this week\", \"30 min with Amy Thursday afternoon\") and choose **Ask Claude** (⌘↩). Claude reads your calendar to plan; nothing changes until you press **Confirm**, and one ⌘Z undoes the whole batch. Requests go to Anthropic's API with the events it looks up. The key is stored locally with the app's other settings.")
+        }
+        .onChange(of: settings.anthropicAPIKey) { assistantTest = nil }
+        .onChange(of: settings.assistantModel) { assistantTest = nil }
     }
 }
 

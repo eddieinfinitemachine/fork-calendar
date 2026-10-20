@@ -6,6 +6,8 @@ final class PaletteModel: ObservableObject {
     @Published var index = 0
     /// Incremented by the key monitor to ask the palette view to run the selected item.
     @Published var confirmTick = 0
+    /// ⌘↩: send the query to the Claude assistant.
+    @Published var askTick = 0
     /// When set, the palette lists draft invoices to bill this event to.
     @Published var billing: CalEvent?
     /// Set by the palette view so arrow keys can clamp.
